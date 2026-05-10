@@ -21,9 +21,28 @@ from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
 from lerobot.optim.optimizers import AdamWConfig
 from lerobot.optim.schedulers import CosineDecayWithWarmupSchedulerConfig
 from lerobot.policies.rtc.configuration_rtc import RTCConfig
+from lerobot.policies.sac.configuration_sac import ActorLearnerConfig, ConcurrencyConfig
 from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
 
 DEFAULT_IMAGE_SIZE = 224
+
+
+@dataclass
+class PI05OnlineRLConfig:
+    enabled: bool = False
+    algorithm: str = "ppo"
+    actor_lr: float = 1e-4
+    critic_lr: float = 1e-4
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    clip_ratio: float = 0.2
+    value_coef: float = 0.5
+    entropy_coef: float = 0.01
+    update_epochs: int = 2
+    mini_batch_size: int = 32
+    max_grad_norm: float = 1.0
+    hidden_dim: int = 256
+    initial_log_std: float = -0.5
 
 
 @PreTrainedConfig.register_subclass("pi05")
@@ -76,10 +95,22 @@ class PI05Config(PreTrainedConfig):
     compile_model: bool = False  # Whether to use torch.compile for model optimization
     compile_mode: str = "max-autotune"  # Torch compile mode
     device: str | None = None  # Device to use for the model (None = auto-detect)
+    storage_device: str = "cpu"
+    online_steps: int = 1_000_000
+    online_buffer_capacity: int = 100_000
+    offline_buffer_capacity: int = 100_000
+    async_prefetch: bool = False
+    online_step_before_learning: int = 100
+    policy_update_freq: int = 1
+    utd_ratio: int = 1
+    grad_clip_norm: float = 1.0
+    actor_learner_config: ActorLearnerConfig = field(default_factory=ActorLearnerConfig)
+    concurrency: ConcurrencyConfig = field(default_factory=ConcurrencyConfig)
 
     # Finetuning settings
     freeze_vision_encoder: bool = False  # Freeze only the vision encoder
     train_expert_only: bool = False  # Freeze entire VLM, train only action expert and projections
+    online_rl: PI05OnlineRLConfig = field(default_factory=PI05OnlineRLConfig)
 
     # Optimizer settings: see openpi `AdamW`
     optimizer_lr: float = 2.5e-5  # see openpi `CosineDecaySchedule: peak_lr`
@@ -114,6 +145,9 @@ class PI05Config(PreTrainedConfig):
 
         if self.dtype not in ["bfloat16", "float32"]:
             raise ValueError(f"Invalid dtype: {self.dtype}")
+
+        if self.online_rl.algorithm not in ["ppo"]:
+            raise ValueError(f"Unsupported online RL algorithm: {self.online_rl.algorithm}")
 
     def validate_features(self) -> None:
         """Validate and set up input/output features."""

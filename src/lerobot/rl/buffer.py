@@ -18,13 +18,23 @@ import functools
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from typing import TypedDict
+from typing_extensions import NotRequired
 
 import torch
 import torch.nn.functional as F  # noqa: N812
 from tqdm import tqdm
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.utils.constants import ACTION, DONE, OBS_IMAGE, REWARD
+from lerobot.utils.constants import (
+    ACTION,
+    DONE,
+    OBS_IMAGE,
+    PPO_ADVANTAGE,
+    PPO_LOGPROB,
+    PPO_RETURN,
+    PPO_VALUE_PRED,
+    REWARD,
+)
 from lerobot.utils.transition import Transition
 
 
@@ -36,6 +46,10 @@ class BatchTransition(TypedDict):
     done: torch.Tensor
     truncated: torch.Tensor
     complementary_info: dict[str, torch.Tensor | float | int] | None = None
+    ppo_logprob_old: NotRequired[torch.Tensor]
+    ppo_value_pred: NotRequired[torch.Tensor]
+    ppo_advantage: NotRequired[torch.Tensor]
+    ppo_return: NotRequired[torch.Tensor]
 
 
 def random_crop_vectorized(images: torch.Tensor, output_size: tuple) -> torch.Tensor:
@@ -292,8 +306,7 @@ class ReplayBuffer:
             batch_complementary_info = {}
             for key in self.complementary_info_keys:
                 batch_complementary_info[key] = self.complementary_info[key][idx].to(self.device)
-
-        return BatchTransition(
+        batch_transition = BatchTransition(
             state=batch_state,
             action=batch_actions,
             reward=batch_rewards,
@@ -302,6 +315,16 @@ class ReplayBuffer:
             truncated=batch_truncateds,
             complementary_info=batch_complementary_info,
         )
+        if batch_complementary_info is not None:
+            if PPO_LOGPROB in batch_complementary_info:
+                batch_transition["ppo_logprob_old"] = batch_complementary_info[PPO_LOGPROB]
+            if PPO_VALUE_PRED in batch_complementary_info:
+                batch_transition["ppo_value_pred"] = batch_complementary_info[PPO_VALUE_PRED]
+            if PPO_ADVANTAGE in batch_complementary_info:
+                batch_transition["ppo_advantage"] = batch_complementary_info[PPO_ADVANTAGE]
+            if PPO_RETURN in batch_complementary_info:
+                batch_transition["ppo_return"] = batch_complementary_info[PPO_RETURN]
+        return batch_transition
 
     def get_iterator(
         self,

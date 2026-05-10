@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor, nn
+from torch.distributions import Normal
 from typing_extensions import Unpack
 
 from lerobot.utils.import_utils import _transformers_available
@@ -48,6 +49,7 @@ from lerobot.utils.constants import (
     ACTION,
     OBS_LANGUAGE_ATTENTION_MASK,
     OBS_LANGUAGE_TOKENS,
+    OBS_STATE,
     OPENPI_ATTENTION_MASK_VALUE,
 )
 
@@ -923,8 +925,30 @@ class PI05Policy(PreTrainedPolicy):
             self.model.gradient_checkpointing_enable()
 
         self.model.to(config.device)
+        self._init_online_rl_heads()
 
         self.reset()
+
+    def _init_online_rl_heads(self) -> None:
+        self.online_actor_input = None
+        self.online_actor_output = None
+        self.online_value_head = None
+        self.online_log_std = None
+        if not self.config.online_rl.enabled:
+            return
+
+        action_dim = self.config.output_features[ACTION].shape[0]
+        hidden_dim = self.config.online_rl.hidden_dim
+        self.online_actor_input = nn.Linear(self.config.max_state_dim, hidden_dim)
+        self.online_actor_output = nn.Linear(hidden_dim, action_dim)
+        self.online_value_head = nn.Sequential(
+            nn.Linear(self.config.max_state_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1),
+        )
+        self.online_log_std = nn.Parameter(
+            torch.full((action_dim,), self.config.online_rl.initial_log_std, dtype=torch.float32)
+        )
 
     @classmethod
     def from_pretrained(
@@ -1112,6 +1136,46 @@ class PI05Policy(PreTrainedPolicy):
     def get_optim_params(self) -> dict:
         return self.parameters()
 
+    def _prepare_online_state(self, batch: dict[str, Tensor]) -> Tensor:
+        if OBS_STATE not in batch:
+            raise ValueError(f"Online RL requires `{OBS_STATE}` in the batch.")
+        state = batch[OBS_STATE]
+        if state.ndim == 1:
+            state = state.unsqueeze(0)
+        if state.shape[-1] < self.config.max_state_dim:
+            state = pad_vector(state, self.config.max_state_dim)
+        elif state.shape[-1] > self.config.max_state_dim:
+            state = state[..., : self.config.max_state_dim]
+        return state.to(dtype=torch.float32)
+
+    def forward_online_rl(self, batch: dict[str, Tensor], action: Tensor | None = None) -> dict[str, Tensor]:
+        if not self.config.online_rl.enabled:
+            raise RuntimeError("PI05 online RL is disabled in the policy config.")
+        if self.online_actor_input is None or self.online_actor_output is None:
+            raise RuntimeError("Online RL actor head is not initialized.")
+        if self.online_value_head is None or self.online_log_std is None:
+            raise RuntimeError("Online RL value head is not initialized.")
+
+        state = self._prepare_online_state(batch)
+        actor_hidden = torch.tanh(self.online_actor_input(state))
+        action_mean = self.online_actor_output(actor_hidden)
+        action_log_std = self.online_log_std.clamp(-5.0, 2.0).unsqueeze(0).expand_as(action_mean)
+        action_dist = Normal(loc=action_mean, scale=action_log_std.exp())
+        sampled_action = action_dist.rsample()
+        target_action = sampled_action if action is None else action
+        if target_action.ndim == 1:
+            target_action = target_action.unsqueeze(0)
+        logprob = action_dist.log_prob(target_action).sum(dim=-1)
+        entropy = action_dist.entropy().sum(dim=-1)
+        value = self.online_value_head(state).squeeze(-1)
+        return {
+            "action": sampled_action,
+            "action_mean": action_mean,
+            "value": value,
+            "logprob": logprob,
+            "entropy": entropy,
+        }
+
     def reset(self):
         """Reset internal state - called when environment resets."""
         self._action_queue = deque(maxlen=self.config.n_action_steps)
@@ -1209,6 +1273,10 @@ class PI05Policy(PreTrainedPolicy):
     @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
         """Select a single action given environment observations."""
+        if self.config.online_rl.enabled:
+            self.eval()
+            return self.forward_online_rl(batch)["action"]
+
         assert not self._rtc_enabled(), (
             "RTC is not supported for select_action, use it with predict_action_chunk"
         )

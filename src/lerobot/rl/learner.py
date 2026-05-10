@@ -54,6 +54,7 @@ from pprint import pformat
 
 import grpc
 import torch
+import torch.nn.functional as F  # noqa: N812
 from termcolor import colored
 from torch import nn
 from torch.multiprocessing import Queue
@@ -65,6 +66,7 @@ from lerobot.configs.train import TrainRLServerPipelineConfig
 from lerobot.datasets.factory import make_dataset
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy
+from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.sac.modeling_sac import SACPolicy
 from lerobot.rl.buffer import ReplayBuffer, concatenate_batch_transitions
 from lerobot.rl.process import ProcessSignalHandler
@@ -83,6 +85,10 @@ from lerobot.utils.constants import (
     ACTION,
     CHECKPOINTS_DIR,
     LAST_CHECKPOINT_LINK,
+    PPO_ADVANTAGE,
+    PPO_LOGPROB,
+    PPO_RETURN,
+    PPO_VALUE_PRED,
     PRETRAINED_MODEL_DIR,
     TRAINING_STATE_DIR,
 )
@@ -304,12 +310,13 @@ def add_actor_information_and_train(
 
     logging.info("Initializing policy")
 
-    policy: SACPolicy = make_policy(
+    policy: PreTrainedPolicy = make_policy(
         cfg=cfg.policy,
         env_cfg=cfg.env,
     )
 
     assert isinstance(policy, nn.Module)
+    is_pi05_online_ppo = cfg.policy.type == "pi05" and getattr(cfg.policy.online_rl, "enabled", False)
 
     policy.train()
 
@@ -387,6 +394,58 @@ def add_actor_information_and_train(
             offline_iterator = offline_replay_buffer.get_iterator(
                 batch_size=batch_size, async_prefetch=async_prefetch, queue_size=2
             )
+
+        if is_pi05_online_ppo:
+            time_for_one_optimization_step = time.time()
+            batch = next(online_iterator)
+            training_infos = train_pi05_online_ppo_step(
+                policy=policy,
+                batch=batch,
+                optimizers=optimizers,
+                clip_grad_norm_value=clip_grad_norm_value,
+                cfg=cfg,
+            )
+            if time.time() - last_time_policy_pushed > policy_parameters_push_frequency:
+                push_actor_policy_to_queue(parameters_queue=parameters_queue, policy=policy)
+                last_time_policy_pushed = time.time()
+
+            if optimization_step % log_freq == 0:
+                training_infos["replay_buffer_size"] = len(replay_buffer)
+                training_infos["Optimization step"] = optimization_step
+                if wandb_logger:
+                    wandb_logger.log_dict(d=training_infos, mode="train", custom_step_key="Optimization step")
+
+            time_for_one_optimization_step = time.time() - time_for_one_optimization_step
+            frequency_for_one_optimization_step = 1 / (time_for_one_optimization_step + 1e-9)
+            logging.info(f"[LEARNER] Optimization frequency loop [Hz]: {frequency_for_one_optimization_step}")
+            if wandb_logger:
+                wandb_logger.log_dict(
+                    {
+                        "Optimization frequency loop [Hz]": frequency_for_one_optimization_step,
+                        "Optimization step": optimization_step,
+                    },
+                    mode="train",
+                    custom_step_key="Optimization step",
+                )
+
+            optimization_step += 1
+            if optimization_step % log_freq == 0:
+                logging.info(f"[LEARNER] Number of optimization step: {optimization_step}")
+
+            if saving_checkpoint and (optimization_step % save_freq == 0 or optimization_step == online_steps):
+                save_training_checkpoint(
+                    cfg=cfg,
+                    optimization_step=optimization_step,
+                    online_steps=online_steps,
+                    interaction_message=interaction_message,
+                    policy=policy,
+                    optimizers=optimizers,
+                    replay_buffer=replay_buffer,
+                    offline_replay_buffer=offline_replay_buffer,
+                    dataset_repo_id=dataset_repo_id,
+                    fps=fps,
+                )
+            continue
 
         time_for_one_optimization_step = time.time()
         for _ in range(utd_ratio - 1):
@@ -782,6 +841,16 @@ def make_optimizers_and_scheduler(cfg: TrainRLServerPipelineConfig, policy: nn.M
         - `lr_scheduler`: Currently set to `None` but can be extended to support learning rate scheduling.
 
     """
+    if cfg.policy.type == "pi05" and getattr(cfg.policy.online_rl, "enabled", False):
+        actor_params = list(policy.online_actor_input.parameters()) + list(policy.online_actor_output.parameters())
+        actor_params.append(policy.online_log_std)
+        critic_params = list(policy.online_value_head.parameters())
+        optimizers = {
+            "actor": torch.optim.Adam(params=actor_params, lr=cfg.policy.online_rl.actor_lr),
+            "critic": torch.optim.Adam(params=critic_params, lr=cfg.policy.online_rl.critic_lr),
+        }
+        return optimizers, None
+
     optimizer_actor = torch.optim.Adam(
         params=[
             p
@@ -1009,6 +1078,142 @@ def initialize_offline_replay_buffer(
     return offline_replay_buffer
 
 
+def compute_gae_and_returns(
+    rewards: torch.Tensor,
+    values: torch.Tensor,
+    dones: torch.Tensor,
+    gamma: float,
+    gae_lambda: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute GAE-style targets from flat batches.
+
+    NOTE: ReplayBuffer currently samples unordered transitions. We therefore use
+    a one-step bootstrapped approximation that is robust to non-sequential data.
+    """
+    del gae_lambda
+    returns = rewards + gamma * (1.0 - dones) * values
+    advantages = returns - values
+    return advantages, returns
+
+
+def compute_ppo_actor_critic_loss(
+    logprob: torch.Tensor,
+    old_logprob: torch.Tensor,
+    advantages: torch.Tensor,
+    values: torch.Tensor,
+    returns: torch.Tensor,
+    entropy: torch.Tensor,
+    clip_ratio: float,
+    vf_coef: float,
+    ent_coef: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
+    ratio = torch.exp(logprob - old_logprob)
+    clipped_ratio = torch.clamp(ratio, 1.0 - clip_ratio, 1.0 + clip_ratio)
+    policy_loss = -torch.min(ratio * advantages, clipped_ratio * advantages).mean()
+    value_loss = F.mse_loss(values, returns)
+    entropy_loss = entropy.mean()
+    total_loss = policy_loss + vf_coef * value_loss - ent_coef * entropy_loss
+    return total_loss, policy_loss, value_loss, entropy_loss
+
+
+def train_pi05_online_ppo_step(
+    policy: PreTrainedPolicy,
+    batch: dict[str, torch.Tensor | dict[str, torch.Tensor]],
+    optimizers: dict[str, Optimizer],
+    clip_grad_norm_value: float,
+    cfg: TrainRLServerPipelineConfig,
+) -> dict[str, float]:
+    if not hasattr(policy, "forward_online_rl"):
+        raise ValueError("PI05 online PPO expects policy.forward_online_rl to exist.")
+
+    actions = batch[ACTION]
+    observations = batch["state"]
+    rewards = batch["reward"].float()
+    dones = batch["done"].float()
+    complementary_info = batch.get("complementary_info") or {}
+
+    action_dim = cfg.policy.output_features[ACTION].shape[0]
+    actions = actions[:, :action_dim]
+    old_logprob = complementary_info.get(PPO_LOGPROB)
+    value_pred = complementary_info.get(PPO_VALUE_PRED)
+
+    with torch.no_grad():
+        if old_logprob is None or value_pred is None:
+            rollout_output = policy.forward_online_rl(observations, action=actions)
+            old_logprob = rollout_output["logprob"]
+            value_pred = rollout_output["value"]
+        advantages, returns = compute_gae_and_returns(
+            rewards=rewards,
+            values=value_pred.float(),
+            dones=dones,
+            gamma=cfg.policy.online_rl.gamma,
+            gae_lambda=cfg.policy.online_rl.gae_lambda,
+        )
+
+    mini_batch_size = min(cfg.policy.online_rl.mini_batch_size, actions.shape[0])
+    indices = torch.randperm(actions.shape[0], device=actions.device)
+    last_losses = None
+    for _ in range(cfg.policy.online_rl.update_epochs):
+        for start in range(0, actions.shape[0], mini_batch_size):
+            batch_idx = indices[start : start + mini_batch_size]
+            batch_obs = {k: v[batch_idx] for k, v in observations.items()}
+            batch_actions = actions[batch_idx]
+            batch_old_logprob = old_logprob[batch_idx]
+            batch_adv = advantages[batch_idx]
+            batch_ret = returns[batch_idx]
+
+            ppo_output = policy.forward_online_rl(batch_obs, action=batch_actions)
+            total_loss, policy_loss, value_loss, entropy_loss = compute_ppo_actor_critic_loss(
+                logprob=ppo_output["logprob"],
+                old_logprob=batch_old_logprob,
+                advantages=batch_adv,
+                values=ppo_output["value"],
+                returns=batch_ret,
+                entropy=ppo_output["entropy"],
+                clip_ratio=cfg.policy.online_rl.clip_ratio,
+                vf_coef=cfg.policy.online_rl.value_coef,
+                ent_coef=cfg.policy.online_rl.entropy_coef,
+            )
+
+            optimizers["actor"].zero_grad()
+            optimizers["critic"].zero_grad()
+            total_loss.backward()
+            actor_params = list(policy.online_actor_input.parameters()) + list(
+                policy.online_actor_output.parameters()
+            )
+            actor_params.append(policy.online_log_std)
+            critic_params = list(policy.online_value_head.parameters())
+            actor_grad_norm = torch.nn.utils.clip_grad_norm_(
+                parameters=actor_params, max_norm=clip_grad_norm_value
+            )
+            critic_grad_norm = torch.nn.utils.clip_grad_norm_(
+                parameters=critic_params, max_norm=clip_grad_norm_value
+            )
+            optimizers["actor"].step()
+            optimizers["critic"].step()
+            last_losses = {
+                "loss_actor": policy_loss.item(),
+                "loss_value": value_loss.item(),
+                "loss_entropy": entropy_loss.item(),
+                "loss_total": total_loss.item(),
+                "actor_grad_norm": float(actor_grad_norm),
+                "critic_grad_norm": float(critic_grad_norm),
+                "advantage_mean": float(batch_adv.mean()),
+            }
+    if last_losses is None:
+        last_losses = {
+            "loss_actor": 0.0,
+            "loss_value": 0.0,
+            "loss_entropy": 0.0,
+            "loss_total": 0.0,
+            "actor_grad_norm": 0.0,
+            "critic_grad_norm": 0.0,
+            "advantage_mean": 0.0,
+        }
+    return last_losses
+
+
 # Utilities/Helpers functions
 
 
@@ -1092,15 +1297,18 @@ def check_nan_in_transition(
 def push_actor_policy_to_queue(parameters_queue: Queue, policy: nn.Module):
     logging.debug("[LEARNER] Pushing actor policy to the queue")
 
-    # Create a dictionary to hold all the state dicts
-    state_dicts = {"policy": move_state_dict_to_device(policy.actor.state_dict(), device="cpu")}
+    if isinstance(policy, SACPolicy):
+        # Create a dictionary to hold all the state dicts
+        state_dicts = {"policy": move_state_dict_to_device(policy.actor.state_dict(), device="cpu")}
 
-    # Add discrete critic if it exists
-    if hasattr(policy, "discrete_critic") and policy.discrete_critic is not None:
-        state_dicts["discrete_critic"] = move_state_dict_to_device(
-            policy.discrete_critic.state_dict(), device="cpu"
-        )
-        logging.debug("[LEARNER] Including discrete critic in state dict push")
+        # Add discrete critic if it exists
+        if hasattr(policy, "discrete_critic") and policy.discrete_critic is not None:
+            state_dicts["discrete_critic"] = move_state_dict_to_device(
+                policy.discrete_critic.state_dict(), device="cpu"
+            )
+            logging.debug("[LEARNER] Including discrete critic in state dict push")
+    else:
+        state_dicts = {"policy": move_state_dict_to_device(policy.state_dict(), device="cpu")}
 
     state_bytes = state_to_bytes(state_dicts)
     parameters_queue.put(state_bytes)
@@ -1154,6 +1362,13 @@ def process_transitions(
             ):
                 logging.warning("[LEARNER] NaN detected in transition, skipping")
                 continue
+
+            complementary_info = transition.get("complementary_info")
+            if complementary_info is not None and PPO_VALUE_PRED in complementary_info:
+                complementary_info.setdefault(PPO_RETURN, complementary_info[PPO_VALUE_PRED])
+                complementary_info.setdefault(
+                    PPO_ADVANTAGE, torch.zeros_like(complementary_info[PPO_VALUE_PRED])
+                )
 
             replay_buffer.add(**transition)
 

@@ -292,7 +292,8 @@ def act_with_policy(
         ppo_complementary_info = {}
         with policy_timer:
             if cfg.policy.type == "pi05" and getattr(cfg.policy.online_rl, "enabled", False):
-                online_output = policy.forward_online_rl(observation)
+                with torch.no_grad():
+                    online_output = policy.forward_online_rl(observation)
                 action = online_output["action"]
                 ppo_complementary_info = {
                     PPO_LOGPROB: online_output["logprob"].detach(),
@@ -689,6 +690,17 @@ def update_policy_parameters(policy: PreTrainedPolicy, parameters_queue: Queue, 
                 )
                 policy.discrete_critic.load_state_dict(discrete_critic_state_dict)
                 logging.info("[ACTOR] Loaded discrete critic parameters from Learner.")
+        elif "policy_online" in state_dicts:
+            online_state = move_state_dict_to_device(state_dicts["policy_online"], device=device)
+            if not hasattr(policy, "online_actor_input") or policy.online_actor_input is None:
+                raise RuntimeError("Received online head weights but actor head is not initialized.")
+            policy.online_actor_input.load_state_dict(online_state["online_actor_input"])
+            policy.online_actor_output.load_state_dict(online_state["online_actor_output"])
+            policy.online_value_head.load_state_dict(online_state["online_value_head"])
+            if getattr(policy, "online_log_std", None) is None:
+                raise RuntimeError("Received online log_std but policy has no online_log_std parameter.")
+            with torch.no_grad():
+                policy.online_log_std.copy_(online_state["online_log_std"])
         else:
             policy_state_dict = move_state_dict_to_device(state_dicts["policy"], device=device)
             policy.load_state_dict(policy_state_dict, strict=False)

@@ -1,46 +1,54 @@
 # Installation
 
-This guide uses conda (via miniforge) to manage environments. If you prefer another environment manager (e.g. `uv`, `venv`), ensure you have Python >=3.10 and ffmpeg installed with the `libsvtav1` encoder, then skip ahead to [Install LeRobot](#step-3-install-lerobot-).
+This guide uses `uv` as the default environment manager for faster and cleaner dependency isolation. If you prefer conda, see [Conda fallback](#conda-fallback).
 
-## Step 1: Install [`miniforge`](https://conda-forge.org/download/)
+## Optional: Configure proxy
+
+If your network needs an HTTP proxy for package/model downloads, export it before installation:
 
 ```bash
-wget "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
-bash Miniforge3-$(uname)-$(uname -m).sh
+export http_proxy=http://192.168.32.28:18000
+export https_proxy=http://192.168.32.28:18000
 ```
 
-## Step 2: Environment Setup
-
-Create a virtual environment with Python 3.10, using conda:
+## Step 1: Install `uv`
 
 ```bash
-conda create -y -n lerobot python=3.10
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Then activate your conda environment, you have to do this each time you open a shell to use lerobot:
+## Step 2: Create Python 3.10 environment (uv)
 
 ```bash
-conda activate lerobot
+uv python install 3.10
+uv venv --python 3.10 .venv
+source .venv/bin/activate
 ```
 
-When using `conda`, install `ffmpeg` in your environment:
+## Step 3: Install ffmpeg
+
+Install ffmpeg in your system environment:
 
 ```bash
-conda install ffmpeg -c conda-forge
+sudo apt-get update
+sudo apt-get install -y ffmpeg
 ```
 
 > [!TIP]
-> This usually installs `ffmpeg 7.X` for your platform compiled with the `libsvtav1` encoder. If `libsvtav1` is not supported (check supported encoders with `ffmpeg -encoders`), you can:
+> If your ffmpeg build does not support `libsvtav1` (check with `ffmpeg -encoders`), you can:
 >
-> - _[On any platform]_ Explicitly install `ffmpeg 7.X` using:
+> - _[On any platform]_ install ffmpeg `7.X` from conda-forge:
 >
 > ```bash
 > conda install ffmpeg=7.1.1 -c conda-forge
 > ```
 >
-> - _[On Linux only]_ If you want to bring your own ffmpeg: Install [ffmpeg build dependencies](https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu#GettheDependencies) and [compile ffmpeg from source with libsvtav1](https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu#libsvtav1), and make sure you use the corresponding ffmpeg binary to your install with `which ffmpeg`.
+> - _[On Linux only]_ build ffmpeg from source with `libsvtav1` support:
+>   [Dependencies](https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu#GettheDependencies),
+>   [Build instructions](https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu#libsvtav1).
 
-## Step 3: Install LeRobot 🤗
+## Step 4: Install LeRobot from source 🤗
 
 ### From Source
 
@@ -51,10 +59,39 @@ git clone https://github.com/huggingface/lerobot.git
 cd lerobot
 ```
 
-Then, install the library in editable mode. This is useful if you plan to contribute to the code.
+Then install dependencies. For PI/PI0.5 training, install with the `pi` extra:
 
 ```bash
-pip install -e .
+python -m pip install -U pip setuptools wheel
+python -m pip install -e ".[pi]"
+```
+
+## Step 5: Verify installation
+
+Run the checks below to confirm you are using the intended environment and that PI0.5-specific transformer patches are available:
+
+```bash
+which python
+python -V
+which pip
+python -c "import transformers; print('transformers:', transformers.__version__)"
+python -c "from transformers.models.siglip import check; print('siglip patch ok:', check.check_whether_transformers_replace_is_installed_correctly())"
+```
+
+For PI0.5, `siglip patch ok` should print `True`.
+
+## Conda fallback
+
+If you prefer conda/miniforge, use:
+
+```bash
+wget "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
+bash Miniforge3-$(uname)-$(uname -m).sh
+conda create -y -n lerobot python=3.10
+conda activate lerobot
+conda install -y ffmpeg=7.1.1 -c conda-forge
+python -m pip install -U pip setuptools wheel
+python -m pip install -e ".[pi]"
 ```
 
 ### Installation from PyPI
@@ -63,7 +100,7 @@ pip install -e .
 Install the base package with:
 
 ```bash
-pip install lerobot
+python -m pip install lerobot
 ```
 
 _This installs only the default dependencies._
@@ -72,9 +109,9 @@ _This installs only the default dependencies._
 To install additional functionality, use one of the following:
 
 ```bash
-pip install 'lerobot[all]'          # All available features
-pip install 'lerobot[aloha,pusht]'  # Specific features (Aloha & Pusht)
-pip install 'lerobot[feetech]'      # Feetech motor support
+python -m pip install 'lerobot[all]'          # All available features
+python -m pip install 'lerobot[aloha,pusht]'  # Specific features (Aloha & Pusht)
+python -m pip install 'lerobot[feetech]'      # Feetech motor support
 ```
 
 _Replace `[...]` with your desired features._
@@ -84,7 +121,7 @@ For a full list of optional dependencies, see:
 https://pypi.org/project/lerobot/
 
 > [!NOTE]
-> For lerobot 0.4.0, if you want to install pi, you will have to do: `pip install "lerobot[pi]@git+https://github.com/huggingface/lerobot.git"`
+> For lerobot 0.4.0, if you want to install pi, you will have to do: `python -m pip install "lerobot[pi]@git+https://github.com/huggingface/lerobot.git"`
 
 ### Troubleshooting
 
@@ -107,7 +144,7 @@ Install environment packages: `aloha` ([gym-aloha](https://github.com/huggingfac
 Example:
 
 ```bash
-pip install -e ".[aloha]" # or "[pusht]" for example
+python -m pip install -e ".[aloha]" # or "[pusht]" for example
 ```
 
 ### Motor Control
@@ -115,7 +152,7 @@ pip install -e ".[aloha]" # or "[pusht]" for example
 For Koch v1.1 install the Dynamixel SDK, for SO100/SO101/Moss install the Feetech SDK.
 
 ```bash
-pip install -e ".[feetech]" # or "[dynamixel]" for example
+python -m pip install -e ".[feetech]" # or "[dynamixel]" for example
 ```
 
 ### Experiment Tracking

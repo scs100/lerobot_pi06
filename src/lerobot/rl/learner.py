@@ -842,6 +842,13 @@ def make_optimizers_and_scheduler(cfg: TrainRLServerPipelineConfig, policy: nn.M
 
     """
     if cfg.policy.type == "pi05" and getattr(cfg.policy.online_rl, "enabled", False):
+        if (
+            getattr(policy, "online_actor_input", None) is None
+            or getattr(policy, "online_actor_output", None) is None
+            or getattr(policy, "online_value_head", None) is None
+            or getattr(policy, "online_log_std", None) is None
+        ):
+            raise RuntimeError("PI05 online RL heads are not initialized on the policy.")
         actor_params = list(policy.online_actor_input.parameters()) + list(policy.online_actor_output.parameters())
         actor_params.append(policy.online_log_std)
         critic_params = list(policy.online_value_head.parameters())
@@ -1081,6 +1088,7 @@ def initialize_offline_replay_buffer(
 def compute_gae_and_returns(
     rewards: torch.Tensor,
     values: torch.Tensor,
+    next_values: torch.Tensor,
     dones: torch.Tensor,
     gamma: float,
     gae_lambda: float,
@@ -1088,10 +1096,11 @@ def compute_gae_and_returns(
     """Compute GAE-style targets from flat batches.
 
     NOTE: ReplayBuffer currently samples unordered transitions. We therefore use
-    a one-step bootstrapped approximation that is robust to non-sequential data.
+    a one-step bootstrapped approximation (TD(0)-style target), which is robust
+    to non-sequential random batches.
     """
     del gae_lambda
-    returns = rewards + gamma * (1.0 - dones) * values
+    returns = rewards + gamma * (1.0 - dones) * next_values
     advantages = returns - values
     return advantages, returns
 
@@ -1129,6 +1138,7 @@ def train_pi05_online_ppo_step(
 
     actions = batch[ACTION]
     observations = batch["state"]
+    next_observations = batch["next_state"]
     rewards = batch["reward"].float()
     dones = batch["done"].float()
     complementary_info = batch.get("complementary_info") or {}
@@ -1143,18 +1153,20 @@ def train_pi05_online_ppo_step(
             rollout_output = policy.forward_online_rl(observations, action=actions)
             old_logprob = rollout_output["logprob"]
             value_pred = rollout_output["value"]
+        next_value_pred = policy.forward_online_rl(next_observations)["value"]
         advantages, returns = compute_gae_and_returns(
             rewards=rewards,
             values=value_pred.float(),
+            next_values=next_value_pred.float(),
             dones=dones,
             gamma=cfg.policy.online_rl.gamma,
             gae_lambda=cfg.policy.online_rl.gae_lambda,
         )
 
     mini_batch_size = min(cfg.policy.online_rl.mini_batch_size, actions.shape[0])
-    indices = torch.randperm(actions.shape[0], device=actions.device)
     last_losses = None
     for _ in range(cfg.policy.online_rl.update_epochs):
+        indices = torch.randperm(actions.shape[0], device=actions.device)
         for start in range(0, actions.shape[0], mini_batch_size):
             batch_idx = indices[start : start + mini_batch_size]
             batch_obs = {k: v[batch_idx] for k, v in observations.items()}
@@ -1307,6 +1319,21 @@ def push_actor_policy_to_queue(parameters_queue: Queue, policy: nn.Module):
                 policy.discrete_critic.state_dict(), device="cpu"
             )
             logging.debug("[LEARNER] Including discrete critic in state dict push")
+    elif (
+        getattr(getattr(policy, "config", None), "type", None) == "pi05"
+        and getattr(getattr(policy.config, "online_rl", None), "enabled", False)
+    ):
+        state_dicts = {
+            "policy_online": move_state_dict_to_device(
+                {
+                    "online_actor_input": policy.online_actor_input.state_dict(),
+                    "online_actor_output": policy.online_actor_output.state_dict(),
+                    "online_value_head": policy.online_value_head.state_dict(),
+                    "online_log_std": policy.online_log_std.detach().clone(),
+                },
+                device="cpu",
+            )
+        }
     else:
         state_dicts = {"policy": move_state_dict_to_device(policy.state_dict(), device="cpu")}
 

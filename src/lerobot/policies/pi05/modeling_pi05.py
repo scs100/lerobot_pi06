@@ -1040,8 +1040,29 @@ class PI05Policy(PreTrainedPolicy):
 
             if remap_count > 0:
                 print(f"Remapped {remap_count} state dict keys")
-            # Load the remapped state dict into the model
-            missing_keys, unexpected_keys = model.load_state_dict(remapped_state_dict, strict=strict)
+            # In online RL mode we intentionally add fresh online_* heads that are not present in
+            # the base PI05 checkpoint. We allow these keys to be missing while keeping strict
+            # loading behavior for all other parameters.
+            allow_online_head_missing = bool(getattr(model.config.online_rl, "enabled", False))
+            load_strict = strict and not allow_online_head_missing
+            missing_keys, unexpected_keys = model.load_state_dict(remapped_state_dict, strict=load_strict)
+
+            if allow_online_head_missing:
+                allowed_missing_prefixes = (
+                    "online_actor_input.",
+                    "online_actor_output.",
+                    "online_value_head.",
+                )
+                missing_non_online = [
+                    key
+                    for key in missing_keys
+                    if not key.startswith(allowed_missing_prefixes) and key != "online_log_std"
+                ]
+                if missing_non_online:
+                    raise RuntimeError(
+                        "Unexpected missing keys while loading PI05 online RL checkpoint: "
+                        f"{missing_non_online}"
+                    )
 
             if missing_keys:
                 print(f"Missing keys when loading state dict: {len(missing_keys)} keys")
@@ -1165,6 +1186,7 @@ class PI05Policy(PreTrainedPolicy):
         target_action = sampled_action if action is None else action
         if target_action.ndim == 1:
             target_action = target_action.unsqueeze(0)
+        target_action = target_action.to(device=action_mean.device, dtype=action_mean.dtype)
         logprob = action_dist.log_prob(target_action).sum(dim=-1)
         entropy = action_dist.entropy().sum(dim=-1)
         value = self.online_value_head(state).squeeze(-1)

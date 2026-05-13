@@ -15,7 +15,7 @@
 ### Environments & Dependencies ###
 .env
 .venv
-.venv.backup*/
+.venv.backup*
 env/
 venv/
 env.bak/

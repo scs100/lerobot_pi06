@@ -3,7 +3,7 @@
 # Plan step 1–3: v4l-utils install hint, enumerate by-path, optional format listing.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PYTHON="${PYTHON:-}"
 if [[ -z "$PYTHON" || ! -x "$PYTHON" ]]; then
   for cand in "$HOME/miniconda3/envs"/*/bin/python "$HOME/anaconda3/envs"/*/bin/python "$(command -v python3)"; do
@@ -51,4 +51,4 @@ fi
 
 echo ""
 echo "== OpenCV quick probe (640x480, one frame per device) =="
-"$PYTHON" "$ROOT/scripts/probe_v4l_opencv.py" "$CAM_LEFT" "$CAM_RIGHT" ${CAM_FRONT:+"$CAM_FRONT"}
+"$PYTHON" "$ROOT/scripts/softenv/probe_v4l_opencv.py" "$CAM_LEFT" "$CAM_RIGHT" ${CAM_FRONT:+"$CAM_FRONT"}

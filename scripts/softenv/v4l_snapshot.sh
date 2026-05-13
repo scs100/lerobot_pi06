@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Save /dev/v4l/by-path listing for before/after plugging a camera; compare with diff.
 # Usage:
-#   ./scripts/v4l_snapshot.sh before.txt
+#   ./scripts/softenv/v4l_snapshot.sh before.txt
 #   # plug third camera
-#   ./scripts/v4l_snapshot.sh after.txt
+#   ./scripts/softenv/v4l_snapshot.sh after.txt
 #   diff -u before.txt after.txt
 set -euo pipefail
 

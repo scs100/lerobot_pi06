@@ -8,12 +8,12 @@ mapfile -t cams < <(find /dev/v4l/by-path -maxdepth 1 -name '*video-index0' -typ
 n="${#cams[@]}"
 if [[ "$n" -lt 3 ]]; then
   echo "Found $n video-index0 device(s); need 3 for tri-camera teleop." >&2
-  echo "Run ./scripts/v4l_snapshot.sh before.txt , plug camera, ./scripts/v4l_snapshot.sh after.txt , diff them." >&2
+  echo "Run ./scripts/softenv/v4l_snapshot.sh before.txt , plug camera, ./scripts/softenv/v4l_snapshot.sh after.txt , diff them." >&2
   printf '%s\n' "${cams[@]:-}"
   exit 1
 fi
 
-echo "# Copy-paste or: eval \"\$(./scripts/auto_export_three_cams.sh | grep '^export')\""
+echo "# Copy-paste or: eval \"\$(./scripts/teleop/auto_export_three_cams.sh | grep '^export')\""
 echo "export CAM_LEFT=${cams[0]}"
 echo "export CAM_RIGHT=${cams[1]}"
 echo "export CAM_FRONT=${cams[2]}"

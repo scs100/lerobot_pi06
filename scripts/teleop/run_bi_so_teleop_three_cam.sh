@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Dual-arm SO101 teleop with three OpenCV cameras (left wrist, right wrist, front on right arm config).
 # Usage:
-#   cp scripts/so101_bi_three_cam.env.example scripts/so101_bi_three_cam.env  # edit CAM_FRONT + PCI paths
-#   source scripts/so101_bi_three_cam.env
-#   ./scripts/run_bi_so_teleop_three_cam.sh
+#   cp scripts/teleop/so101_bi_three_cam.env.example scripts/teleop/so101_bi_three_cam.env  # edit CAM_FRONT + PCI paths
+#   source scripts/teleop/so101_bi_three_cam.env
+#   ./scripts/teleop/run_bi_so_teleop_three_cam.sh
 #
-# Smoke test (front camera only):  FRONT_ONLY=1 ./scripts/run_bi_so_teleop_three_cam.sh
+# Smoke test (front camera only):  FRONT_ONLY=1 ./scripts/teleop/run_bi_so_teleop_three_cam.sh
 #
 # Optional: CAM_ROTATION=180  (Cv2Rotation: 0, 90, 180, or 270) applies to every OpenCV camera block below.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 LERO_CMD="$(command -v lerobot-teleoperate 2>/dev/null || true)"

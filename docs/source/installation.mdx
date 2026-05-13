@@ -82,17 +82,36 @@ For PI0.5, `siglip patch ok` should print `True`.
 
 ## Conda fallback
 
-If you prefer conda/miniforge, use:
+If you prefer conda/miniforge and want a dedicated `lerobotpi06` environment for PI/PI0.5 (including online RL grpc deps), run:
+
+```bash
+conda create -y -n lerobotpi06 python=3.10 && \
+conda install -y -n lerobotpi06 -c conda-forge ffmpeg=7.1.1 && \
+conda run -n lerobotpi06 python -m pip install -U pip setuptools wheel && \
+conda run -n lerobotpi06 python -m pip install -e ".[pi,grpcio-dep]" --no-build-isolation
+```
+
+Then activate the environment:
+
+```bash
+conda activate lerobotpi06
+```
+
+If conda/miniforge is not installed yet, install it first:
 
 ```bash
 wget "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
 bash Miniforge3-$(uname)-$(uname -m).sh
-conda create -y -n lerobot python=3.10
-conda activate lerobot
-conda install -y ffmpeg=7.1.1 -c conda-forge
-python -m pip install -U pip setuptools wheel
-python -m pip install -e ".[pi]"
 ```
+
+If this machine is used for camera/teleop on Linux, install V4L tools once:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y v4l-utils
+```
+
+`v4l-utils` is not required on pure training/dev machines without local camera devices.
 
 ### Installation from PyPI
 

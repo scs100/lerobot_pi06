@@ -19,38 +19,9 @@ source /opt/conda/etc/profile.d/conda.sh
 conda activate lerobotpi6
 
 # 3) 训练（直接调用 trainpi05.sh，不使用 env_trainpi05.sh）
-cd /media/jushen/stone-shi/code/mylong/lerobot_pi06 
-source /opt/conda/etc/profile.d/conda.sh
-conda activate lerobotpi6
-export WANDB_PROJECT="put_the_phone_stand_into_the_shipping_box0509_2208_6gpus_bf16_bs64"
-export WANDB_API_KEY="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"
-SHARED_HF_HOME=/media/jushen/stone-shi/lerobot_pi06/hf_home
-OFFLINE_PRETRAINED_MODEL_PATH=/media/jushen/stone-shi/lerobot_pi06/models/lerobot_pi05_base
-SHARED_TOKENIZER_DIR=/media/jushen/stone-shi/lerobot_pi06/models/google_paligemma_3b_pt_224_tokenizer
-# 说明：--offline 时会从 OFFLINE_PRETRAINED_MODEL_PATH 读取本地预训练模型，不走联网下载。
-bash scripts/training/trainpi05.sh train \
-  --proxy \
-  --hf-home "${SHARED_HF_HOME}" \
-  --pretrained-path "${OFFLINE_PRETRAINED_MODEL_PATH}" \
-  --offline \
-  --dataset-root /media/jushen/stone-shi/lerobot_v30/put_the_phone_stand_into_the_shipping_box0509_2208 \
-  --output-root /media/jushen/stone-shi/lerobot_pi06/checkpoints/lerobotpi06 \
-  --num-processes 6 \
-  --cuda-visible-devices 0,1,2,3,4,5 \
-  --save-freq 5000 \
-  --log-freq 5 \
-  --wandb-enable true \
-  --wandb-project "${WANDB_PROJECT}" \
-  --wandb-api-key "${WANDB_API_KEY}" \
-  --mixed-precision bf16 \
-  --batch-size 64 \
-  --steps 30000 \
-  --compile-model false \
-  --run-tag 8gpus_bf16_bs64
 
-
-#分布式训练
-cd /media/jushen/stone-shi/code/mylong/lerobot_pi06 
+# 分布式训练（8卡）
+cd /media/jushen/stone-shi/code/mylong/lerobot_pi06
 source /opt/conda/etc/profile.d/conda.sh
 conda activate lerobotpi6
 export WANDB_PROJECT="put_the_phone_stand_into_the_shipping_box0509_2208_8gpus_bf16_bs64"
@@ -58,16 +29,22 @@ export WANDB_API_KEY="wandb_v1_9HcxUp1AQCKocTbHr7NQTS0Ecdq_M20upwVNFPADytAmAn2ZS
 SHARED_HF_HOME=/media/jushen/stone-shi/lerobot_pi06/hf_home
 OFFLINE_PRETRAINED_MODEL_PATH=/media/jushen/stone-shi/lerobot_pi06/models/lerobot_pi05_base
 SHARED_TOKENIZER_DIR=/media/jushen/stone-shi/lerobot_pi06/models/google_paligemma_3b_pt_224_tokenizer
-# 说明：--offline 时会从 OFFLINE_PRETRAINED_MODEL_PATH 读取本地预训练模型，不走联网下载。
+# 说明：--offline_pretrain_load 时会从 OFFLINE_PRETRAINED_MODEL_PATH 读取本地预训练模型，不走联网下载。
+
+export TORCHINDUCTOR_COMPILE_THREADS=1
+export TORCHINDUCTOR_MAX_AUTOTUNE_GEMM_BACKENDS=ATEN
+export TORCHINDUCTOR_CACHE_DIR=/media/jushen/stone-shi/lerobot_pi06/torchinductor_cache
+export TRITON_CACHE_DIR=/media/jushen/stone-shi/lerobot_pi06/triton_cache
+
 bash scripts/training/trainpi05.sh train \
   --proxy \
   --hf-home "${SHARED_HF_HOME}" \
   --pretrained-path "${OFFLINE_PRETRAINED_MODEL_PATH}" \
-  --offline \
+  --offline_pretrain_load \
   --dataset-root /media/jushen/stone-shi/lerobot_v30/put_the_phone_stand_into_the_shipping_box0509_2208 \
   --output-root /media/jushen/stone-shi/lerobot_pi06/checkpoints/lerobotpi06 \
-  --num-processes 4 \
-  --cuda-visible-devices 0,1,2,3 \
+  --num-processes 8 \
+  --cuda-visible-devices 0,1,2,3,4,5,6,7 \
   --save-freq 5000 \
   --log-freq 100 \
   --wandb-enable true \
@@ -76,8 +53,9 @@ bash scripts/training/trainpi05.sh train \
   --mixed-precision bf16 \
   --batch-size 64 \
   --steps 30000 \
-  --compile-model false \
-  --run-tag 4gpus_bf16_bs64
+  --compile-model true \
+  --compile-mode reduce-overhead \
+  --run-tag 8gpus_bf16_bs64_compile_ro
 
 
 # 4) PI05 + OnlineRL 启动（同一 lerobotpi6 conda 环境）
@@ -102,14 +80,14 @@ bash scripts/training/trainpi05_online_rl.sh check \
   --proxy \
   --hf-home "${SHARED_HF_HOME}" \
   --policy-pretrained-path "${OFFLINE_PRETRAINED_MODEL_PATH}" \
-  --offline
+  --offline_pretrain_load
 
 # 4.2 终端A：启动 learner（先用小步 smoke 参数）
 bash scripts/training/trainpi05_online_rl.sh learner \
   --proxy \
   --hf-home "${SHARED_HF_HOME}" \
   --policy-pretrained-path "${OFFLINE_PRETRAINED_MODEL_PATH}" \
-  --offline \
+  --offline_pretrain_load \
   --config-path "${ONLINE_RL_CONFIG}" \
   --output-dir "${ONLINE_RL_OUTPUT}" \
   --dataset-root "${DATASET_ROOT}" \
@@ -131,7 +109,7 @@ bash scripts/training/trainpi05_online_rl.sh actor \
   --proxy \
   --hf-home "${SHARED_HF_HOME}" \
   --policy-pretrained-path "${OFFLINE_PRETRAINED_MODEL_PATH}" \
-  --offline \
+  --offline_pretrain_load \
   --config-path "${ONLINE_RL_CONFIG}" \
   --output-dir "${ONLINE_RL_OUTPUT}" \
   --dataset-root "${DATASET_ROOT}" \

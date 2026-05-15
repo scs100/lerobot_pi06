@@ -22,7 +22,7 @@ Common options:
                           PI05 pretrained path (HF repo or local pretrained_model dir).
   --hf-home PATH          Shared HF cache root (for deterministic local cache).
   --no-persistent-hf-home Disable custom HF_HOME for this run.
-  --offline               Force HF/transformers/datasets offline mode.
+  --offline_pretrain_load Force HF/transformers/datasets offline mode.
   --online                Disable offline mode (default behavior).
   --device DEV            policy.device. Default: cuda
   --storage-device DEV    policy.storage_device. Default: cpu
@@ -168,8 +168,13 @@ while [[ $# -gt 0 ]]; do
       ENABLE_PERSISTENT_HF_HOME="false"
       shift
       ;;
+    --offline_pretrain_load)
+      ENABLE_OFFLINE="true"
+      shift
+      ;;
     --offline)
       ENABLE_OFFLINE="true"
+      log_info "'--offline' 已废弃，请改用 '--offline_pretrain_load'."
       shift
       ;;
     --online)

@@ -59,8 +59,8 @@ Notes:
   - For train/smoke/check, unknown args are passed through to trainpi05.sh.
   - For online-check/online-learner/online-actor, unknown args are passed through to trainpi05_online_rl.sh.
   - online-* 默认使用隔离 shared-root: /media/jushen/stone-shi/lerobot_pi05online_rl_runtime
-  - Defaults added by this wrapper: --hf-home <shared-hf-home>, --pretrained-path <shared-model-dir>, --offline.
-  - Online commands also add: --policy-pretrained-path <shared-model-dir>, --hf-home <shared-hf-home>, --offline.
+  - Defaults added by this wrapper: --hf-home <shared-hf-home>, --pretrained-path <shared-model-dir>, --offline_pretrain_load.
+  - Online commands also add: --policy-pretrained-path <shared-model-dir>, --hf-home <shared-hf-home>, --offline_pretrain_load.
   - init rewrites tokenizer refs in policy_preprocessor.json to local tokenizer directory.
   - If a stale lock is detected, the script can prompt or auto-clean safely.
   - Pass --online in trailing args if you explicitly need online mode.
@@ -956,7 +956,7 @@ run_wrapped_trainpi05() {
     bash "${TRAINPI05_SH}" "${subcmd}"
     "--hf-home" "${SHARED_HF_HOME}"
     "--pretrained-path" "${SHARED_MODEL_DIR}"
-    "--offline"
+    "--offline_pretrain_load"
   )
   if [[ "${ENABLE_PROXY}" == "true" ]]; then
     cmd+=(
@@ -978,7 +978,7 @@ run_wrapped_trainpi05_online_rl() {
     bash "${TRAINPI05_ONLINE_RL_SH}" "${subcmd}"
     "--hf-home" "${SHARED_HF_HOME}"
     "--policy-pretrained-path" "${SHARED_MODEL_DIR}"
-    "--offline"
+    "--offline_pretrain_load"
   )
   if [[ "${ENABLE_PROXY}" == "true" ]]; then
     cmd+=(

@@ -37,7 +37,7 @@ Common options:
   --https-proxy URL         Explicit https proxy URL (implies --proxy).
   --hf-home PATH            Shared HF cache root. Default: /media/jushen/stone-shi/hf_home
   --no-persistent-hf-home   Disable default shared HF cache path.
-  --offline                 Force offline mode (HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1).
+  --offline_pretrain_load  Force offline mode (HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1).
   --online                  Disable offline mode for this run (allow network access).
   --hf-token TOKEN          HF token for non-interactive login command.
   -h, --help                Show this help.
@@ -206,8 +206,13 @@ while [[ $# -gt 0 ]]; do
       ENABLE_PERSISTENT_HF_HOME="false"
       shift
       ;;
+    --offline_pretrain_load)
+      ENABLE_OFFLINE="true"
+      shift
+      ;;
     --offline)
       ENABLE_OFFLINE="true"
+      log_warn "'--offline' 已废弃，请改用 '--offline_pretrain_load'."
       shift
       ;;
     --online)

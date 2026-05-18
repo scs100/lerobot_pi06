@@ -1,0 +1,29 @@
+{
+  "output_dir": "outputs/hil_serl/reward_classifier/replace_me",
+  "job_name": "so101_hil_serl_reward_classifier",
+  "resume": false,
+  "batch_size": 64,
+  "steps": 5000,
+  "log_freq": 20,
+  "save_freq": 500,
+  "wandb": {
+    "enable": false,
+    "project": "so101-hil-serl-reward-classifier"
+  },
+  "dataset": {
+    "repo_id": "replace_with_classifier_dataset_repo_id",
+    "root": "replace_with_classifier_dataset_root"
+  },
+  "policy": {
+    "type": "reward_classifier",
+    "device": "cuda",
+    "model_name": "helper2424/resnet10",
+    "model_type": "cnn",
+    "num_cameras": 3,
+    "num_classes": 2,
+    "hidden_dim": 256,
+    "latent_dim": 256,
+    "dropout_rate": 0.1,
+    "learning_rate": 0.0001
+  }
+}

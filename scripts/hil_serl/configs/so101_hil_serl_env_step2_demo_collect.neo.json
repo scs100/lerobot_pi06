@@ -1,0 +1,101 @@
+{
+  "env": {
+    "name": "real_robot",
+    "task": "replace_with_task_name",
+    "fps": 10,
+    "robot": {
+      "type": "bi_so_follower",
+      "id": "my_so101_follower",
+      "left_arm_config": {
+        "port": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B61032646-if00",
+        "use_degrees": true,
+        "cameras": {
+          "wrist": {
+            "type": "opencv",
+            "index_or_path": "/dev/v4l/by-path/pci-0000:0e:00.0-usb-0:3:1.0-video-index0",
+            "width": 640,
+            "height": 480,
+            "fps": 30,
+            "rotation": 180,
+            "fourcc": "YUYV"
+          }
+        }
+      },
+      "right_arm_config": {
+        "port": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B61034934-if00",
+        "use_degrees": true,
+        "cameras": {
+          "wrist": {
+            "type": "opencv",
+            "index_or_path": "/dev/v4l/by-path/pci-0000:0e:00.0-usb-0:2:1.0-video-index0",
+            "width": 640,
+            "height": 480,
+            "fps": 30,
+            "rotation": 180,
+            "fourcc": "YUYV"
+          },
+          "front": {
+            "type": "opencv",
+            "index_or_path": "/dev/v4l/by-path/pci-0000:0e:00.0-usb-0:5:1.0-video-index0",
+            "width": 640,
+            "height": 480,
+            "fps": 30,
+            "rotation": 180,
+            "fourcc": "MJPG"
+          }
+        }
+      }
+    },
+    "teleop": {
+      "type": "bi_so_leader",
+      "id": "my_so101_leader",
+      "left_arm_config": {
+        "port": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B61035982-if00",
+        "use_degrees": true
+      },
+      "right_arm_config": {
+        "port": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B61032643-if00",
+        "use_degrees": true
+      }
+    },
+    "processor": {
+      "control_mode": "joint_direct",
+      "observation": {
+        "display_cameras": false,
+        "add_joint_velocity_to_observation": true
+      },
+      "image_preprocessing": {
+        "crop_params_dict": {},
+        "resize_size": [
+          224,
+          224
+        ]
+      },
+      "gripper": {
+        "use_gripper": true,
+        "gripper_penalty": 0.0
+      },
+      "reset": {
+        "reset_time_s": 4.0,
+        "control_time_s": 10.0,
+        "terminate_on_success": true
+      },
+      "inverse_kinematics": null,
+      "reward_classifier": {
+        "pretrained_path": "replace_with_reward_classifier_pretrained_path",
+        "success_threshold": 0.7,
+        "success_reward": 1.0
+      }
+    }
+  },
+  "dataset": {
+    "repo_id": "replace_with_demo_dataset_repo_id",
+    "root": "replace_with_demo_dataset_root",
+    "task": "replace_with_task_name",
+    "num_episodes_to_record": 25,
+    "replay_episode": null,
+    "push_to_hub": false
+  },
+  "mode": "record",
+  "device": "cuda"
+}

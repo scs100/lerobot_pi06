@@ -114,6 +114,8 @@ def record_loop(
     acp_inference: ACPInferenceConfig | None = None,
     communication_retry_timeout_s: float = 2.0,
     communication_retry_interval_s: float = 0.1,
+    end_loop_on_intervention_start: bool = False,
+    end_loop_on_intervention_release: bool = False,
 ):
     if acp_inference is None:
         acp_inference = ACPInferenceConfig()
@@ -147,7 +149,12 @@ def record_loop(
             )
 
     if dataset is None and policy is not None:
-        raise ValueError("Policy-driven recording requires a dataset for feature mapping.")
+        # During pre-episode idle loops (wait_for_episode_start), callers intentionally pass
+        # dataset=None while still running policy/teleop control updates. In that mode we can
+        # derive action names from robot.action_features below, so this should not be fatal.
+        logging.debug(
+            "record_loop called with policy enabled and dataset=None; falling back to robot action features."
+        )
 
     action_feature_names = dataset.features[ACTION]["names"] if dataset is not None else None
     if action_feature_names is None:
@@ -158,7 +165,18 @@ def record_loop(
     zero_policy_action = dict.fromkeys(action_feature_names, 0.0)
     has_teleop = isinstance(teleop, (Teleoperator, list))
     intervention_enabled = intervention_state_machine_enabled and policy is not None and has_teleop
-    intervention_state = INTERVENTION_STATE_POLICY
+    if "intervention_active" not in events:
+        events["intervention_active"] = False
+    if "intervention_started" not in events:
+        events["intervention_started"] = False
+    if "intervention_released" not in events:
+        events["intervention_released"] = False
+
+    intervention_state = (
+        INTERVENTION_STATE_ACTIVE
+        if intervention_enabled and bool(events.get("intervention_active", False))
+        else INTERVENTION_STATE_POLICY
+    )
     last_teleop_action: RobotAction | None = None
     teleop_fallback_warned = False
 
@@ -178,7 +196,9 @@ def record_loop(
         except Exception:
             logging.exception("Failed to switch teleop manual-control mode to %s", enabled)
 
-    if policy is None:
+    if intervention_enabled:
+        set_teleop_manual_control(intervention_state == INTERVENTION_STATE_ACTIVE)
+    elif policy is None:
         # During reset/teleop-only loops keep leader backdrivable for manual dragging.
         set_teleop_manual_control(True)
 
@@ -193,10 +213,6 @@ def record_loop(
     if policy is not None and acp_inference.enable and acp_inference.use_cfg:
         cond_policy_runtime_state = _capture_policy_runtime_state(policy)
         uncond_policy_runtime_state = _capture_policy_runtime_state(policy)
-
-    if intervention_enabled:
-        # Start in S0: policy drives both arms, teleop arm should accept feedback commands.
-        set_teleop_manual_control(False)
 
     def run_with_connection_retry(action_name: str, fn: Callable[[], T]) -> T:
         timeout_s = max(communication_retry_timeout_s, 0.0)
@@ -252,10 +268,19 @@ def record_loop(
             if intervention_enabled:
                 if intervention_state == INTERVENTION_STATE_POLICY:
                     intervention_state = INTERVENTION_STATE_ACTIVE
+                    events["intervention_active"] = True
+                    events["intervention_started"] = True
+                    events["intervention_released"] = False
                     set_teleop_manual_control(True)
                     logging.info("Intervention enabled (S1): teleop actions now override policy execution.")
+                    if end_loop_on_intervention_start:
+                        events["exit_early"] = True
+                        continue
                 else:
                     intervention_state = INTERVENTION_STATE_RELEASE
+                    events["intervention_active"] = False
+                    events["intervention_released"] = True
+                    events["intervention_started"] = False
                     set_teleop_manual_control(False)
                     if policy is not None and preprocessor is not None and postprocessor is not None:
                         policy.reset()
@@ -267,6 +292,9 @@ def record_loop(
                     if policy is not None and preprocessor is not None and postprocessor is not None:
                         logging.info("Policy cache reset on release: next policy action is recomputed.")
                     logging.info("Intervention release requested (S2): returning control to policy.")
+                    if end_loop_on_intervention_release:
+                        events["exit_early"] = True
+                        continue
             else:
                 logging.info("Intervention toggle ignored because policy+teleop are not both active.")
 
@@ -283,6 +311,8 @@ def record_loop(
         act_processed_policy: RobotAction | None = None
         act_processed_teleop: RobotAction | None = None
         if (
+            dataset is not None
+            and
             policy is not None
             and preprocessor is not None
             and postprocessor is not None

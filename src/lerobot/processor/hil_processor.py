@@ -412,6 +412,7 @@ class InterventionActionProcessorStep(ProcessorStep):
 
     use_gripper: bool = False
     terminate_on_success: bool = True
+    action_key_order: list[str] | None = None
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """
@@ -442,14 +443,17 @@ class InterventionActionProcessorStep(ProcessorStep):
         # Override action if intervention is active
         if is_intervention and teleop_action is not None:
             if isinstance(teleop_action, dict):
-                # Convert teleop_action dict to tensor format
-                action_list = [
-                    teleop_action.get("delta_x", 0.0),
-                    teleop_action.get("delta_y", 0.0),
-                    teleop_action.get("delta_z", 0.0),
-                ]
-                if self.use_gripper:
-                    action_list.append(teleop_action.get(GRIPPER_KEY, 1.0))
+                if self.action_key_order and all(key in teleop_action for key in self.action_key_order):
+                    action_list = [teleop_action[key] for key in self.action_key_order]
+                else:
+                    # Convert teleop_action dict to tensor format
+                    action_list = [
+                        teleop_action.get("delta_x", 0.0),
+                        teleop_action.get("delta_y", 0.0),
+                        teleop_action.get("delta_z", 0.0),
+                    ]
+                    if self.use_gripper:
+                        action_list.append(teleop_action.get(GRIPPER_KEY, 1.0))
             elif isinstance(teleop_action, np.ndarray):
                 action_list = teleop_action.tolist()
             else:
@@ -488,6 +492,7 @@ class InterventionActionProcessorStep(ProcessorStep):
         return {
             "use_gripper": self.use_gripper,
             "terminate_on_success": self.terminate_on_success,
+            "action_key_order": self.action_key_order,
         }
 
     def transform_features(

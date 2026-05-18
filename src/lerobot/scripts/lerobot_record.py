@@ -245,6 +245,9 @@ class RecordConfig:
     intervention_state_machine_enabled: bool = True
     # Keyboard key used to toggle entering/leaving intervention.
     intervention_toggle_key: str | None = "i"
+    # Keep policy inference running continuously, and only write dataset frames while intervention is active.
+    # Press intervention_toggle_key once to start a recording segment, and press it again to end/save it.
+    record_on_intervention: bool = False
     # Whether to require a key press before each episode starts recording.
     wait_for_episode_start: bool = False
     # Keyboard key to start the current episode when `wait_for_episode_start=true`.
@@ -298,6 +301,19 @@ class RecordConfig:
             )
         else:
             self.episode_start_key = normalize_control_key(self.episode_start_key, "episode_start_key")
+        if self.record_on_intervention:
+            if self.policy is None or self.teleop is None:
+                raise ValueError("`record_on_intervention=true` requires both `policy` and `teleop`.")
+            if not self.intervention_state_machine_enabled:
+                raise ValueError(
+                    "`record_on_intervention=true` requires `intervention_state_machine_enabled=true`."
+                )
+            if self.intervention_toggle_key is None:
+                raise ValueError("`record_on_intervention=true` requires `intervention_toggle_key` to be set.")
+            if self.wait_for_episode_start:
+                raise ValueError(
+                    "`record_on_intervention=true` is incompatible with `wait_for_episode_start=true`."
+                )
 
         if (
             self.enable_episode_outcome_labeling
@@ -524,7 +540,134 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         with VideoEncodingManager(dataset):
             recorded_episodes = 0
             idle_control_slice_s = max(1.0 / cfg.dataset.fps, 0.05)
+            if cfg.record_on_intervention:
+                log_say(
+                    (
+                        f"Autonomous inference is running. Press '{cfg.intervention_toggle_key}' to start "
+                        "intervention recording, and press it again to end/save the current segment."
+                    ),
+                    cfg.play_sounds,
+                )
+                events["intervention_active"] = False
+                events["intervention_started"] = False
+                events["intervention_released"] = False
             while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
+                if cfg.record_on_intervention:
+                    # Idle policy inference phase: keep running control loop without dataset writes.
+                    while not events["stop_recording"] and not bool(events.get("intervention_active", False)):
+                        events["intervention_started"] = False
+                        events["intervention_released"] = False
+                        record_loop(
+                            robot=robot,
+                            events=events,
+                            fps=cfg.dataset.fps,
+                            teleop_action_processor=teleop_action_processor,
+                            robot_action_processor=robot_action_processor,
+                            robot_observation_processor=robot_observation_processor,
+                            teleop=teleop,
+                            policy=policy,
+                            preprocessor=preprocessor,
+                            postprocessor=postprocessor,
+                            dataset=None,
+                            control_time_s=idle_control_slice_s,
+                            single_task=cfg.dataset.single_task,
+                            display_data=cfg.display_data,
+                            display_compressed_images=display_compressed_images,
+                            policy_sync_executor=policy_sync_executor,
+                            intervention_state_machine_enabled=cfg.intervention_state_machine_enabled,
+                            collector_policy_id_policy=collector_policy_id_policy,
+                            collector_policy_id_human=collector_policy_id_human,
+                            acp_inference=cfg.acp_inference,
+                            communication_retry_timeout_s=cfg.communication_retry_timeout_s,
+                            communication_retry_interval_s=cfg.communication_retry_interval_s,
+                            end_loop_on_intervention_start=True,
+                        )
+                    if events["stop_recording"]:
+                        break
+
+                    # Enter intervention segment and start writing dataset frames.
+                    events["exit_early"] = False
+                    events["episode_outcome"] = None
+                    events["intervention_started"] = False
+                    events["intervention_released"] = False
+                    session_episode_num = recorded_episodes + 1
+                    global_episode_index = dataset.num_episodes
+                    log_say(
+                        (
+                            f"Recording intervention segment {session_episode_num} "
+                            f"(global episode_index={global_episode_index})"
+                        ),
+                        cfg.play_sounds,
+                    )
+                    record_loop(
+                        robot=robot,
+                        events=events,
+                        fps=cfg.dataset.fps,
+                        teleop_action_processor=teleop_action_processor,
+                        robot_action_processor=robot_action_processor,
+                        robot_observation_processor=robot_observation_processor,
+                        teleop=teleop,
+                        policy=policy,
+                        preprocessor=preprocessor,
+                        postprocessor=postprocessor,
+                        dataset=dataset,
+                        control_time_s=cfg.dataset.episode_time_s,
+                        single_task=cfg.dataset.single_task,
+                        display_data=cfg.display_data,
+                        display_compressed_images=display_compressed_images,
+                        policy_sync_executor=policy_sync_executor,
+                        intervention_state_machine_enabled=cfg.intervention_state_machine_enabled,
+                        collector_policy_id_policy=collector_policy_id_policy,
+                        collector_policy_id_human=collector_policy_id_human,
+                        acp_inference=cfg.acp_inference,
+                        communication_retry_timeout_s=cfg.communication_retry_timeout_s,
+                        communication_retry_interval_s=cfg.communication_retry_interval_s,
+                        end_loop_on_intervention_release=True,
+                    )
+
+                    if events["rerecord_episode"]:
+                        log_say("Re-record episode", cfg.play_sounds)
+                        events["rerecord_episode"] = False
+                        events["exit_early"] = False
+                        events["episode_outcome"] = None
+                        dataset.clear_episode_buffer()
+                        continue
+
+                    if dataset.episode_buffer is None or dataset.episode_buffer["size"] == 0:
+                        logging.warning(
+                            "Intervention segment ended before any frame was captured; skipping episode save."
+                        )
+                        events["exit_early"] = False
+                        events["episode_outcome"] = None
+                        continue
+
+                    episode_success = None
+                    if cfg.enable_episode_outcome_labeling:
+                        episode_success = resolve_episode_success_label(
+                            explicit_label=events.get("episode_outcome"),
+                            default_label=cfg.default_episode_success,
+                            require_label=cfg.require_episode_success_label,
+                        )
+                        if events.get("episode_outcome") is None and episode_success is not None:
+                            logging.warning(
+                                "Episode %s has no explicit success/failure label, defaulting to '%s'.",
+                                dataset.num_episodes,
+                                episode_success,
+                            )
+
+                    on_episode_outcome = getattr(cfg, "_on_record_episode_outcome", None)
+                    if callable(on_episode_outcome):
+                        on_episode_outcome(robot, teleop, episode_success)
+
+                    extra_episode_metadata = (
+                        {"episode_success": episode_success} if cfg.enable_episode_outcome_labeling else None
+                    )
+                    dataset.save_episode(extra_episode_metadata=extra_episode_metadata)
+                    recorded_episodes += 1
+                    events["exit_early"] = False
+                    events["episode_outcome"] = None
+                    continue
+
                 if cfg.wait_for_episode_start:
                     events["start_episode"] = False
                     session_episode_num = recorded_episodes + 1

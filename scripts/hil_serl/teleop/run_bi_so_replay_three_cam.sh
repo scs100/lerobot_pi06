@@ -4,10 +4,10 @@
 # Usage:
 # conda activate lerobot-pi06
 
-#   set -a && source scripts/teleop/so101_bi_three_cam.env && set +a
+#   set -a && source scripts/hil_serl/teleop/so101_bi_three_cam.env && set +a
 #   export DATASET_REPO_ID=<HF_USERNAME_OR_ORG>/<DATASET_NAME>
 #   export DATASET_EPISODE=0
-#   ./scripts/teleop/run_bi_so_replay_three_cam.sh
+#   ./scripts/hil_serl/teleop/run_bi_so_replay_three_cam.sh
 #
 # Notes:
 # - Replay uses robot joints only, cameras are not required in replay command.
@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 
 LERO_CMD="$(command -v lerobot-replay 2>/dev/null || true)"

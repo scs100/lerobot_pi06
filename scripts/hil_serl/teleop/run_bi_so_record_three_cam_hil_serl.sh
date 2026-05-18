@@ -6,13 +6,13 @@
 #   conda activate lerobot-pi06
 #   export POLICY_PRETRAINED_PATH=/path/to/pretrained_model
 #   export DATASET_REPO_ID=<HF_USERNAME_OR_ORG>/<DATASET_NAME>
-#   ./scripts/teleop/run_bi_so_record_three_cam_hil_serl.sh
+#   ./scripts/hil_serl/teleop/run_bi_so_record_three_cam_hil_serl.sh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 
-ENV_FILE="${ENV_FILE:-${ROOT}/scripts/teleop/so101_bi_three_cam.env}"
+ENV_FILE="${ENV_FILE:-${ROOT}/scripts/hil_serl/teleop/so101_bi_three_cam.env}"
 if [[ ! -f "${ENV_FILE}" ]]; then
   echo "ERROR: env file not found: ${ENV_FILE}" >&2
   exit 1

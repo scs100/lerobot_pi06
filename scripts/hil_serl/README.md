@@ -37,6 +37,13 @@ bash scripts/hil_serl/run_hil_serl_step3_actor.sh ...
 bash scripts/hil_serl/run_hil_serl_step4_deploy.sh ...
 ```
 
+## HIL-SERL 遥操作入口
+
+```bash
+# 入口统一在 scripts/hil_serl/teleop
+bash scripts/hil_serl/teleop/run_bi_so_record_three_cam_hil_serl.sh
+```
+
 ---
 
 ## 可直接复制执行（当前仓库）
@@ -47,7 +54,7 @@ bash scripts/hil_serl/run_hil_serl_step4_deploy.sh ...
 - `scripts/hil_serl/configs/so101_hil_serl_env_step2_demo_collect.neo.json`
 - `scripts/hil_serl/configs/so101_hil_serl_reward_classifier_train.neo.json`
 - `scripts/hil_serl/configs/so101_hil_serl_train_sac.neo.json`
-- 相机/串口环境：`scripts/teleop/so101_bi_three_cam.env`
+- 相机/串口环境：`scripts/hil_serl/teleop/so101_bi_three_cam.env`
 
 ### 0) 初始化变量
 
@@ -82,15 +89,15 @@ cp "$HIL_ENV_CFG_STEP2" "${HIL_ENV_CFG_STEP2%.json}.bak.${HIL_RUN_ID}.json"
 cp "$HIL_TRAIN_CFG" "${HIL_TRAIN_CFG%.json}.bak.${HIL_RUN_ID}.json"
 
 bash scripts/hil_serl/sync_three_cam_env_to_hil_serl_json.sh \
-  --env-file scripts/teleop/so101_bi_three_cam.env \
+  --env-file scripts/hil_serl/teleop/so101_bi_three_cam.env \
   --config-path "$HIL_ENV_CFG_STEP1"
 
 bash scripts/hil_serl/sync_three_cam_env_to_hil_serl_json.sh \
-  --env-file scripts/teleop/so101_bi_three_cam.env \
+  --env-file scripts/hil_serl/teleop/so101_bi_three_cam.env \
   --config-path "$HIL_ENV_CFG_STEP2"
 
 bash scripts/hil_serl/sync_three_cam_env_to_hil_serl_json.sh \
-  --env-file scripts/teleop/so101_bi_three_cam.env \
+  --env-file scripts/hil_serl/teleop/so101_bi_three_cam.env \
   --config-path "$HIL_TRAIN_CFG"
 ```
 
@@ -172,7 +179,7 @@ bash scripts/hil_serl/run_hil_serl_workflow.sh step3_actor \
 ```bash
 bash scripts/hil_serl/run_hil_serl_workflow.sh step4_deploy \
   --output-dir "$HIL_TRAIN_OUT" \
-  --env-file scripts/teleop/so101_bi_three_cam.env \
+  --env-file scripts/hil_serl/teleop/so101_bi_three_cam.env \
   --deploy-duration-s 5400 \
   --display-data false
 ```
@@ -220,7 +227,7 @@ bash scripts/hil_serl/run_hil_serl_step3_actor.sh \
 ```bash
 bash scripts/hil_serl/run_hil_serl_step4_deploy.sh \
   --output-dir outputs/hil_serl/run_001 \
-  --env-file scripts/teleop/so101_bi_three_cam.env \
+  --env-file scripts/hil_serl/teleop/so101_bi_three_cam.env \
   --deploy-duration-s 3600
 ```
 

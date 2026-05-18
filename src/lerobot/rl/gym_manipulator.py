@@ -41,6 +41,7 @@ from lerobot.processor import (
     MapDeltaActionToRobotActionStep,
     MapTensorToDeltaActionDictStep,
     Numpy2TorchActionProcessorStep,
+    PolicyActionToRobotActionProcessorStep,
     RewardClassifierProcessorStep,
     RobotActionToPolicyActionProcessorStep,
     RobotObservation,
@@ -53,6 +54,7 @@ from lerobot.processor import (
 from lerobot.processor.converters import identity_transition
 from lerobot.robots import (  # noqa: F401
     RobotConfig,
+    bi_so_follower,
     make_robot_from_config,
     so_follower,
 )
@@ -65,6 +67,7 @@ from lerobot.robots.so_follower.robot_kinematic_processor import (
     InverseKinematicsRLStep,
 )
 from lerobot.teleoperators import (
+    bi_so_leader,  # noqa: F401
     gamepad,  # noqa: F401
     keyboard,  # noqa: F401
     make_teleoperator_from_config,
@@ -252,7 +255,16 @@ class RobotEnv(gym.Env):
 
     def step(self, action) -> tuple[RobotObservation, float, bool, bool, dict[str, Any]]:
         """Execute one environment step with given action."""
-        joint_targets_dict = {f"{key}.pos": action[i] for i, key in enumerate(self.robot.bus.motors.keys())}
+        if isinstance(action, dict):
+            joint_targets_dict = {
+                key: float(value)
+                for key, value in action.items()
+                if isinstance(key, str) and key.endswith(".pos")
+            }
+            if not joint_targets_dict:
+                raise ValueError("RobotEnv.step expected joint '.pos' keys when action is a dict.")
+        else:
+            joint_targets_dict = {f"{key}.pos": action[i] for i, key in enumerate(self.robot.bus.motors.keys())}
 
         self.robot.send_action(joint_targets_dict)
 
@@ -394,10 +406,11 @@ def make_processors(
     # Full processor pipeline for real robot environment
     # Get robot and motor information for kinematics
     motor_names = list(env.robot.bus.motors.keys())
+    control_mode = (cfg.processor.control_mode or "gamepad").strip().lower()
 
     # Set up kinematics solver if inverse kinematics is configured
     kinematics_solver = None
-    if cfg.processor.inverse_kinematics is not None:
+    if control_mode != "joint_direct" and cfg.processor.inverse_kinematics is not None:
         kinematics_solver = RobotKinematics(
             urdf_path=cfg.processor.inverse_kinematics.urdf_path,
             target_frame_name=cfg.processor.inverse_kinematics.target_frame_name,
@@ -468,44 +481,58 @@ def make_processors(
     env_pipeline_steps.append(AddBatchDimensionProcessorStep())
     env_pipeline_steps.append(DeviceProcessorStep(device=device))
 
-    action_pipeline_steps = [
-        AddTeleopActionAsComplimentaryDataStep(teleop_device=teleop_device),
-        AddTeleopEventsAsInfoStep(teleop_device=teleop_device),
-        InterventionActionProcessorStep(
-            use_gripper=cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else False,
-            terminate_on_success=terminate_on_success,
-        ),
-    ]
+    action_pipeline_steps = [AddTeleopActionAsComplimentaryDataStep(teleop_device=teleop_device)]
+    action_pipeline_steps.append(AddTeleopEventsAsInfoStep(teleop_device=teleop_device))
 
-    # Replace InverseKinematicsProcessor with new kinematic processors
-    if cfg.processor.inverse_kinematics is not None and kinematics_solver is not None:
-        # Add EE bounds and safety processor
-        inverse_kinematics_steps = [
-            MapTensorToDeltaActionDictStep(
-                use_gripper=cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else False
-            ),
-            MapDeltaActionToRobotActionStep(),
-            EEReferenceAndDelta(
-                kinematics=kinematics_solver,
-                end_effector_step_sizes=cfg.processor.inverse_kinematics.end_effector_step_sizes,
-                motor_names=motor_names,
-                use_latched_reference=False,
-                use_ik_solution=True,
-            ),
-            EEBoundsAndSafety(
-                end_effector_bounds=cfg.processor.inverse_kinematics.end_effector_bounds,
-            ),
-            GripperVelocityToJoint(
-                clip_max=cfg.processor.max_gripper_pos,
-                speed_factor=1.0,
-                discrete_gripper=True,
-            ),
-            InverseKinematicsRLStep(
-                kinematics=kinematics_solver, motor_names=motor_names, initial_guess_current_joints=False
-            ),
-        ]
-        action_pipeline_steps.extend(inverse_kinematics_steps)
-        action_pipeline_steps.append(RobotActionToPolicyActionProcessorStep(motor_names=motor_names))
+    if control_mode == "joint_direct":
+        joint_action_keys = [f"{name}.pos" for name in motor_names]
+        action_pipeline_steps.append(
+            InterventionActionProcessorStep(
+                use_gripper=cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else False,
+                terminate_on_success=terminate_on_success,
+                action_key_order=joint_action_keys,
+            )
+        )
+        action_pipeline_steps.append(PolicyActionToRobotActionProcessorStep(motor_names=motor_names))
+        if cfg.processor.inverse_kinematics is not None:
+            logging.warning("control_mode=joint_direct: ignore inverse_kinematics config and run direct joints.")
+    else:
+        action_pipeline_steps.append(
+            InterventionActionProcessorStep(
+                use_gripper=cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else False,
+                terminate_on_success=terminate_on_success,
+            )
+        )
+
+        # Replace InverseKinematicsProcessor with new kinematic processors
+        if cfg.processor.inverse_kinematics is not None and kinematics_solver is not None:
+            # Add EE bounds and safety processor
+            inverse_kinematics_steps = [
+                MapTensorToDeltaActionDictStep(
+                    use_gripper=cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else False
+                ),
+                MapDeltaActionToRobotActionStep(),
+                EEReferenceAndDelta(
+                    kinematics=kinematics_solver,
+                    end_effector_step_sizes=cfg.processor.inverse_kinematics.end_effector_step_sizes,
+                    motor_names=motor_names,
+                    use_latched_reference=False,
+                    use_ik_solution=True,
+                ),
+                EEBoundsAndSafety(
+                    end_effector_bounds=cfg.processor.inverse_kinematics.end_effector_bounds,
+                ),
+                GripperVelocityToJoint(
+                    clip_max=cfg.processor.max_gripper_pos,
+                    speed_factor=1.0,
+                    discrete_gripper=True,
+                ),
+                InverseKinematicsRLStep(
+                    kinematics=kinematics_solver, motor_names=motor_names, initial_guess_current_joints=False
+                ),
+            ]
+            action_pipeline_steps.extend(inverse_kinematics_steps)
+            action_pipeline_steps.append(RobotActionToPolicyActionProcessorStep(motor_names=motor_names))
 
     return DataProcessorPipeline(
         steps=env_pipeline_steps, to_transition=identity_transition, to_output=identity_transition
@@ -542,19 +569,22 @@ def step_env_and_process_transition(
     )
     processed_action_transition = action_processor(transition)
     processed_action = processed_action_transition[TransitionKey.ACTION]
+    complementary_data = processed_action_transition[TransitionKey.COMPLEMENTARY_DATA].copy()
+    # Keep a policy-action tensor for env processors (e.g. gripper penalty),
+    # even when action_processor converts execution action to robot-action dict.
+    policy_action_for_transition = complementary_data.get("teleop_action", action)
 
     obs, reward, terminated, truncated, info = env.step(processed_action)
 
     reward = reward + processed_action_transition[TransitionKey.REWARD]
     terminated = terminated or processed_action_transition[TransitionKey.DONE]
     truncated = truncated or processed_action_transition[TransitionKey.TRUNCATED]
-    complementary_data = processed_action_transition[TransitionKey.COMPLEMENTARY_DATA].copy()
     new_info = processed_action_transition[TransitionKey.INFO].copy()
     new_info.update(info)
 
     new_transition = create_transition(
         observation=obs,
-        action=processed_action,
+        action=policy_action_for_transition,
         reward=reward,
         done=terminated,
         truncated=truncated,

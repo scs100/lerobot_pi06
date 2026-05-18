@@ -27,7 +27,7 @@ Core options:
   --output-dir PATH               覆盖 output_dir（step1_train/step3/step4自动找模型）
   --resume true|false             覆盖 resume（step3_actor 默认自动 true）
   --policy-path PATH              可选，覆盖 policy.path（step3，仅需预训练策略时）或部署模型目录（step4）
-  --env-file PATH                 部署 env 文件，默认 scripts/teleop/so101_bi_three_cam.env
+  --env-file PATH                 部署 env 文件，默认 scripts/hil_serl/teleop/so101_bi_three_cam.env
   --push-to-hub true|false        step1/2 数据采集是否上传，默认 false
   --display-data true|false       step4 是否显示可视化，默认 false
   --deploy-duration-s N           step4 纯推理时长秒数，默认 86400
@@ -68,7 +68,7 @@ Examples:
   # Step4: 纯部署（默认从 output-dir 下自动选最新 checkpoint/pretrained_model）
   bash scripts/hil_serl/run_hil_serl_workflow.sh step4_deploy \
     --output-dir outputs/hil_serl/run_001 \
-    --env-file scripts/teleop/so101_bi_three_cam.env \
+    --env-file scripts/hil_serl/teleop/so101_bi_three_cam.env \
     --deploy-duration-s 3600
 EOF
 }
@@ -114,7 +114,7 @@ OUTPUT_DIR=""
 RESUME=""
 RESUME_SET="false"
 POLICY_PATH=""
-ENV_FILE="${ROOT_DIR}/scripts/teleop/so101_bi_three_cam.env"
+ENV_FILE="${ROOT_DIR}/scripts/hil_serl/teleop/so101_bi_three_cam.env"
 PUSH_TO_HUB="false"
 DISPLAY_DATA="false"
 DEPLOY_DURATION_S="86400"
